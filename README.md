@@ -18,6 +18,7 @@ To enable faster run times and easy editing of code files, the following package
 - PackageCompiler
 
 These packages can be installed from the Julia REPL using the following command:
+
     using Pkg
     Pkg.add(["JuMP", "HiGHS", "Plots", "StatsPlots", "DataFrames", "CSV", "XLSX", "Revise", "PackageCompiler"])
 
