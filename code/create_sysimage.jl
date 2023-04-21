@@ -1,0 +1,2 @@
+using PackageCompiler
+create_sysimage(["JuMP", "HiGHS", "Plots", "StatsPlots", "DataFrames", "CSV", "XLSX", "Revise"], sysimage_path="sys_project.so", precompile_execution_file="precompile_packages.jl")
