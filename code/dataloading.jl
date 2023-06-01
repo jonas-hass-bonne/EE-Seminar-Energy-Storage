@@ -2,7 +2,8 @@
 linear programming energy system models used in the project"""
 module DataLoading
 using DataFrames, CSV, XLSX 
-export loadhourlyOPSdata, loadcapacityOPSdata, loadcapfactorOPSdata, loadcoststructure, loadbatterydata, loadIEAdata
+export loadhourlyOPSdata, loadcapacityOPSdata, loadcapfactorOPSdata, loadcoststructure, loadbatterydata
+export loadIEAdata, loadcapprojections
 
 # Define fucntion to load the hourly Open Power System data
 function loadhourlyOPSdata(year::String)
@@ -85,6 +86,19 @@ function loadIEAdata(;sheet::String="Electricity generation by sourc")
     input_sheet = XLSX.readdata("../input/IEA data.xlsx", sheet, "A5:H8")
     outvec = [input_sheet[4, i] for i in [2, 4, 5, 7, 8]]
     return outvec[[4, 5, 1, 2, 3]]
+end
+
+# Define function to load capacity projections from the Danish Energy Agency
+function loadcapprojections(;sheet::String="Sheet1", year::Integer=2030)
+    input_sheet = XLSX.readdata("../input/2030 projections.xlsx", sheet, "B21:I27")
+    input_2022  = input_sheet[1:3, 2:end]
+    input_2030  = input_sheet[5:7, 2:end-1]
+    if year == 2030
+        outvec = input_2030[2,[1,4,3,6,5,2]]
+    elseif year == 2022
+        outvec = input_2022[2,[1,4,3,6,7,5,2]]
+    end
+    return outvec
 end
 
 end

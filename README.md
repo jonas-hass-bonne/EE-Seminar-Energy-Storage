@@ -22,7 +22,8 @@ These packages can be installed from the Julia REPL using the following command:
     using Pkg
     Pkg.add(["JuMP", "HiGHS", "Plots", "StatsPlots", "DataFrames", "CSV", "XLSX", "Revise", "PackageCompiler"])
 
-The project can then be run be including the main.jl file in the REPL.
-To speed up initial compile-time, the create-sysimage.jl file can be run to build a precompiled system image, which can then be used when starting the Julia REPL by specifying the --sysimage path/to/sys_project.so launch flag
-Additionally, to speed up scenario simulations the Julia REPL can be started with access to multiple threads by specfiying the --threads #N_threads launch flag where #N_threads is the number of threads the Julia REPL will have access to.
+The project can then be run be including the main.jl file in the REPL using `include("path/to/main.jl")`.
 
+To speed up initial compile-time, the create-sysimage.jl file can be run to build a precompiled system image, which can then be used when starting the Julia REPL by specifying the `--sysimage path/to/sys_project.so` launch flag
+
+Additionally, to speed up scenario simulations the Julia REPL can be started with access to multiple threads by specfiying the `--threads #N_threads` launch flag where `#N_threads` is the number of threads the Julia REPL will have access to.

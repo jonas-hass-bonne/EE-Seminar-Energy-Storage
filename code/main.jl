@@ -73,12 +73,14 @@ standardsolve(data::SystemData, config::AbstractConfig, name::String,
 ################
 
 # Load data
-df_h    = loadhourlyOPSdata(2018)
-df_c    = loadcapacityOPSdata(2018)
-df_cf   = loadcapfactorOPSdata(2018)
-sheet_c = loadcoststructure(2)
-sheet_b = loadbatterydata(2)
-IEA_vec = loadIEAdata()
+df_h       = loadhourlyOPSdata(2018)
+df_c       = loadcapacityOPSdata(2018)
+df_cf      = loadcapfactorOPSdata(2018)
+sheet_c    = loadcoststructure(2)
+sheet_b    = loadbatterydata(2)
+IEA_vec    = loadIEAdata()
+proj30_vec = loadcapprojections(year = 2030)
+proj22_vec = loadcapprojections(year = 2022)
 
 # Initialise vectors with capacity constraints and marginal costs
 plants  = [:WindOffshore, :WindOnshore, :Solar, :Coal, :NaturalGas, :Bio]   # Vector of symbols for each plant type 
@@ -134,6 +136,13 @@ baseline_data = SystemData(plants, q_vec, cf_mat, c_vec, fom_vec, L_vec, b_dict,
 # Create a plot of load and capacity factors
 plot_hourly_capfactors(baseline_data, "baseline")
 
+# Plot slices of hourly generation sorted by plant type for IEA data
+plot_generation(baseline_data, IEA_vec, "IEA")
+
+# Create pie-chart of installed capacities for energy agency projections
+plot_capacities(baseline_data, proj22_vec, "projections_2022")
+plot_capacities(baseline_data, proj30_vec, "projections_2030")
+
 ########################
 # MAIN MODEL SOLUTIONS #
 ########################
@@ -142,103 +151,69 @@ plot_hourly_capfactors(baseline_data, "baseline")
 baseref  = objective_value(solve_system_model(baseline_data, GreenfieldConfig(), silent=true))   # Generate a baseline system cost
 base_out = standardsolve(baseline_data, GreenfieldConfig(), "baseline", scenario_df)
 
-# Plot slices of hourly generation sorted by plant type for IEA data
-plot_generation(baseline_data, IEA_vec, "IEA")
-
 # Construct data object for greenfield model
 for plant in ["WindOffshore", "WindOnshore", "Solar", "Coal", "NaturalGas", "Bio"]
     icap_dict[plant] = 1e9   # Allow unlimited capacities for each plant
 end
 greenfield_data = SystemData(plants, q_vec, cf_mat, c_vec, fom_vec, L_vec, b_dict, icap_dict, ic_vec)
 
-# Solve the greenfield model
-# greenfield_out = standardsolve(greenfield_data, GreenfieldConfig(), "greenfield", scenario_df)
-
 # Solve the greenfield model for varying renewable shares
 lk = Threads.SpinLock() # Define a lock for multi-threaded loops
 outvecbio   = Vector{Model}(undef, 5)   # Define vector for storing models including bio
-outvecnobio = Vector{Model}(undef, 5)   # Define vector for storing models excluding bio
 
 styleprintln("Solving the greenfield model for different renewable shares")
-Threads.@threads for i in 1:(length(outvecbio) + length(outvecnobio))
+Threads.@threads for i in 1:length(outvecbio)
     lock(lk)
         threadprint(i, Threads.threadid())
     unlock(lk)
-    if i <= length(outvecbio)
-        global outvecbio[i] = solve_system_model(greenfield_data, LoadshareBioConfig(.5 + i/10), silent=true)
-    else
-        global outvecnobio[i-length(outvecbio)] = solve_system_model(greenfield_data, LoadshareNoBioConfig(.5 + (i - length(outvecbio))/10), silent=true)
-    end
+    global outvecbio[i] = solve_system_model(greenfield_data, LoadshareBioConfig(.5 + i/10), silent=true)
 end
 println("")
 
 styleprintln("Saving output from model simulations")
-# Create vectors for storing model outputs
-bioresults   = deepcopy(objective_value.(outvecbio))
-nobioresults = deepcopy(objective_value.(outvecnobio))
+bioresults   = deepcopy(objective_value.(outvecbio))    # Vector for storing objective value of model
+
 # Save output to DataFrame and generate plots
-for outvec in [outvecbio, outvecnobio] 
-    # Set name to use
-    if outvec == outvecbio
-        dfname  = "Greenfield (Bio) ("
-        figname = "greenfield_bio_"
-    else
-        dfname  = "Greenfield (No Bio) ("
-        figname = "greenfield_nobio_"
-    end
-    for (i, model) in enumerate(outvec) 
-        # Save results to DataFrame
-        global scenario_df[:, dfname * string(50 + 10*i) * "% cap)"] = scenarioreport(model, baseref)
-        # Plot generation, capacities and residual demand
-        plot_hourly_gen(greenfield_data, model, figname * string(50 + 10*i) * "%")
-        plot_hourly_storage(greenfield_data, model, figname * string(50 + 10*i) * "%")
-        plot_capacities(greenfield_data, model, figname * string(50 + 10*i) * "%")
-        plot_generation(greenfield_data, model, figname * string(50 + 10*i) * "%")
-    end
+# Set name to use
+dfname  = "Greenfield (Bio) ("
+figname = "greenfield_bio_"
+for (i, model) in enumerate(outvecbio) 
+    # Save results to DataFrame
+    global scenario_df[:, dfname * string(50 + 10*i) * "% cap)"] = scenarioreport(model, bioresults[i])
+    # Plot generation, capacities and residual demand
+    plot_hourly_gen(greenfield_data, model, figname * string(50 + 10*i) * "%")
+    plot_hourly_storage(greenfield_data, model, figname * string(50 + 10*i) * "%")
+    plot_capacities(greenfield_data, model, figname * string(50 + 10*i) * "%")
+    plot_generation(greenfield_data, model, figname * string(50 + 10*i) * "%")
 end
 
 # Now enable storage investments
 icap_dict["Battery - Flow"] = 1e9
 icap_dict["Battery - Storage"] = 1e9
 
-# greenfield2_out = standardsolve(greenfield_data, GreenfieldConfig(), "greenfield2", scenario_df)
-
 # Solve the greenfield model with storage for varying renewable shares
 styleprintln("Solving the greenfield model with storage for different renewable shares")
-Threads.@threads for i in 1:(length(outvecbio) + length(outvecnobio))
+Threads.@threads for i in 1:length(outvecbio)
     lock(lk)
         threadprint(i, Threads.threadid())
     unlock(lk)
-    if i <= length(outvecbio)
-        global outvecbio[i] = solve_system_model(greenfield_data, LoadshareBioConfig(.5 + i/10), silent=true)
-    else
-        n = i - length(outvecbio)
-        global outvecnobio[n] = solve_system_model(greenfield_data, LoadshareNoBioConfig(.5 + n/10), silent=true)
-    end
+    global outvecbio[i] = solve_system_model(greenfield_data, LoadshareBioConfig(.5 + i/10), silent=true)
 end
 println("")
 
 styleprintln("Saving output from model simulations")
-for outvec in [outvecbio, outvecnobio] 
-    # Set name to use
-    if outvec == outvecbio
-        dfname  = "Greenfield - Storage (Bio) ("
-        figname = "greenfield_storage_bio_"
-        plot_systemcosts(bioresults, outvec, "bio")
-    else
-        dfname  = "Greenfield - Storage (No Bio) ("
-        figname = "greenfield_storage_nobio_"
-        plot_systemcosts(nobioresults, outvec, "nobio")
-    end
-    for (i, model) in enumerate(outvec) 
-        # Save results to DataFrame
-        global scenario_df[:, dfname * string(50 + 10*i) * "% cap)"] = scenarioreport(model, baseref)
-        # Plot generation, capacities and residual demand
-        plot_hourly_gen(greenfield_data, model, figname * string(50 + 10*i) * "%")
-        plot_hourly_storage(greenfield_data, model, figname * string(50 + 10*i) * "%")
-        plot_capacities(greenfield_data, model, figname * string(50 + 10*i) * "%")
-        plot_generation(greenfield_data, model, figname * string(50 + 10*i) * "%")
-    end
+# Set name to use
+dfname  = "Greenfield - Storage (Bio) ("
+figname = "greenfield_storage_bio_"
+plot_systemcosts(bioresults, outvecbio, "bio")
+for (i, model) in enumerate(outvecbio) 
+    # Save results to DataFrame
+    global scenario_df[:, dfname * string(50 + 10*i) * "% cap)"] = scenarioreport(model, bioresults[i])
+    # Plot generation, capacities and residual demand
+    plot_hourly_gen(greenfield_data, model, figname * string(50 + 10*i) * "%")
+    plot_hourly_storage(greenfield_data, model, figname * string(50 + 10*i) * "%")
+    plot_capacities(greenfield_data, model, figname * string(50 + 10*i) * "%")
+    plot_generation(greenfield_data, model, figname * string(50 + 10*i) * "%")
 end
 
 ########################
@@ -248,24 +223,22 @@ end
 #########################################################################
 # NIMBY constraint for Solar (10x baseline) and OnshoreWind (2x baseline)
 
-# icap_dict["Solar"]             = 3*baseline_data.capacities[baseline_data.plants .== :Solar][1]
-# icap_dict["WindOnshore"]       = 3*baseline_data.capacities[baseline_data.plants .== :WindOnshore][1]
+icap_dict["Solar"]             = proj30_vec[4]
+icap_dict["WindOnshore"]       = proj30_vec[3]
 icap_dict["Battery - Flow"]    = 0 # Compute NIMBY constrained model without storage
 icap_dict["Battery - Storage"] = 0
 
-greenfield_nimby_nostorage_bio_out   = standardsolve(greenfield_data, NIMBYBioConfig(3.), "greenfield_nimby_nostorage_bio", scenario_df)
-greenfield_nimby_nostorage_nobio_out = standardsolve(greenfield_data, NIMBYNoBioConfig(3.), "greenfield_nimby_nostorage_nobio", scenario_df)
+greenfield_nimby_nostorage_bio_out   = standardsolve(greenfield_data, LoadshareBioConfig(1.), "greenfield_nimby_nostorage_bio", scenario_df)
 
 # Now compute NIMBY constrained model with storage
 icap_dict["Battery - Flow"]    = 1e9
 icap_dict["Battery - Storage"] = 1e9
 
-greenfield_nimby_storage_bio_out   = standardsolve(greenfield_data, NIMBYBioConfig(3.), "greenfield_nimby_storage_bio", scenario_df)
-greenfield_nimby_storage_nobio_out = standardsolve(greenfield_data, NIMBYNoBioConfig(3.), "greenfield_nimby_storage_nobio", scenario_df)
+greenfield_nimby_storage_bio_out   = standardsolve(greenfield_data, LoadshareBioConfig(1.), "greenfield_nimby_storage_bio", scenario_df)
 
 # Reset investment caps for Solar and OnshoreWind plants
-# icap_dict["Solar"]       = 1e9
-# icap_dict["WindOnshore"] = 1e9
+icap_dict["Solar"]       = 1e9
+icap_dict["WindOnshore"] = 1e9
 
 #################################################
 # Battery type constrained to be a 4-hour battery
@@ -274,22 +247,16 @@ icap_dict["Battery - Flow"]    = 0 # Compute battery-type constrained model with
 icap_dict["Battery - Storage"] = 0
 
 greenfield_batconstraint_nostorage_bio_out   = standardsolve(greenfield_data, FixedBatteryBioConfig(4.), "greenfield_batconstraint_nostorage_bio", scenario_df)
-greenfield_batconstraint_nostorage_nobio_out = standardsolve(greenfield_data, FixedBatteryNoBioConfig(4.), "greenfield_batconstraint_nostorage_nobio", scenario_df)
 
 # Now compute battery-type constrained model with storage
 icap_dict["Battery - Flow"]    = 1e9
 icap_dict["Battery - Storage"] = 1e9
 
 greenfield_batconstraint_storage_bio_out   = standardsolve(greenfield_data, FixedBatteryBioConfig(4.), "greenfield_batconstraint_storage_bio", scenario_df)
-greenfield_batconstraint_storage_nobio_out = standardsolve(greenfield_data, FixedBatteryNoBioConfig(4.), "greenfield_batconstraint_storage_nobio", scenario_df)
 
 plot_systemcosts([bioresults[5], objective_value(greenfield_nimby_nostorage_bio_out), objective_value(greenfield_batconstraint_nostorage_bio_out)],
                  [outvecbio[5], greenfield_nimby_storage_bio_out, greenfield_batconstraint_storage_bio_out], "nimby_battery_bio", 
-                 xvals = [x for _ in 1:2, x in ["Baseline", "NIMBY-constrained", "Battery-type-constrained"]][:],
-                 xlabel = "Simulation scenario")
-plot_systemcosts([nobioresults[5], objective_value(greenfield_nimby_nostorage_nobio_out), objective_value(greenfield_batconstraint_nostorage_nobio_out)],
-                 [outvecnobio[5], greenfield_nimby_storage_nobio_out, greenfield_batconstraint_storage_nobio_out], "nimby_battery_nobio",
-                 xvals = [x for _ in 1:2, x in ["Baseline", "NIMBY-constrained", "Battery-type-constrained"]][:],
+                 xvals = [x for _ in 1:2, x in ["Baseline", "NIMBY constrained", "Battery type constrained"]][:],
                  xlabel = "Simulation scenario")
 
 ############################################################################################
@@ -306,7 +273,6 @@ for (i, scale) in enumerate(0.5:.1:2.5)
     global datavec[i] = SystemData(plants, q_vec, cf_mat, c_vec, fom_vec, L_vec, cur_dict, icap_dict, ic_vec)
 end
 outvecbio   = Vector{Model}(undef, 21)
-outvecnobio = Vector{Model}(undef, 21) 
 
 # Generate a vector with tuple of values used for solving the model and saving the output
 loopvec = [(i, "Greenfield - Storage " * y, data) 
@@ -319,27 +285,16 @@ Threads.@threads for (i, name, data) in loopvec
         threadprint(i, Threads.threadid())
     unlock(lk)
     global outvecbio[i] = solve_system_model(data, LoadshareBioConfig(1.), silent=true)
-    global outvecnobio[i] = solve_system_model(data, LoadshareNoBioConfig(1.), silent=true)
 end
 println("")
 
 styleprintln("Saving output from model simulations")
-for outvec in [outvecbio, outvecnobio] 
-    # Set name to use
-    if outvec == outvecbio
-        dfname  = "Greenfield - Storage (Bio) ("
-        figname = "greenfield_storage_bio_"
-        plot_storagecosts(outvec, bioresults[5], figname)
-    else
-        dfname  = "Greenfield - Storage (No Bio) ("
-        figname = "greenfield_storage_nobio_"
-        plot_storagecosts(outvec, nobioresults[5], figname)
-    end
-    for (i, model) in enumerate(outvec) 
-        # Save results to DataFrame
-        global scenario_df[:, dfname * string(10*i) * "% cost increase)"] = scenarioreport(model, baseref)
-    end
-    
+dfname  = "Greenfield - Storage (Bio) ("
+figname = "greenfield_storage_bio_"
+plot_storagecosts(outvecbio, bioresults[5], figname)
+for (i, model) in enumerate(outvecbio) 
+    # Save results to DataFrame
+    global scenario_df[:, dfname * string(10*i) * "% cost increase)"] = scenarioreport(model, baseref)
 end
 
 ######################################################
@@ -370,53 +325,61 @@ end
 
 # Solve the greenfield model for varying data years without storage
 outvecbio   = Vector{Model}(undef, 5)
-outvecnobio = Vector{Model}(undef, 5)
+
 icap_dict["Battery - Flow"]    = 0
 icap_dict["Battery - Storage"] = 0
+
 styleprintln("Solving the Greenfield model without storage for different data years")
-Threads.@threads for i in 1:(length(outvecbio) + length(outvecnobio))
+Threads.@threads for i in 1:length(outvecbio)
     lock(lk)
         threadprint(i, Threads.threadid())
     unlock(lk)
-    if i <= length(outvecbio)
-        global outvecbio[i] = solve_system_model(datavec[i], LoadshareBioConfig(1.), silent=true)
-    else
-        n = i - length(outvecbio)
-        global outvecnobio[n] = solve_system_model(datavec[n], LoadshareNoBioConfig(1.), silent=true)
-    end
+    global outvecbio[i] = solve_system_model(datavec[i], LoadshareBioConfig(1.), silent=true)
 end
 println("")
 
 # Create vectors for storing model outputs
 bioresults   = deepcopy(objective_value.(outvecbio))
-nobioresults = deepcopy(objective_value.(outvecnobio))
+
+dfname  = "Greenfield (Bio) ("
+figname = "greenfield_bio_"
+for (i, model) in enumerate(outvecbio) 
+    # Save results to DataFrame
+    global scenario_df[:, dfname * string(2014 + i)] = scenarioreport(model, bioresults[i])
+    # Plot generation, capacities and residual demand
+    plot_hourly_gen(datavec[i], model, figname * string(2014 + i))
+    plot_hourly_storage(datavec[i], model, figname * string(2014 + i))
+    plot_capacities(datavec[i], model, figname * string(2014 + i))
+    plot_generation(datavec[i], model, figname * string(2014 + i))
+end
 
 # Now solve the greenfield model for varying data years with storage
 icap_dict["Battery - Flow"]    = 1e9
 icap_dict["Battery - Storage"] = 1e9
 
-# styleprintln("Solving the Greenfield model with storage for different data years")
-Threads.@threads for i in 1:(length(outvecbio) + length(outvecnobio))
+styleprintln("Solving the Greenfield model with storage for different data years")
+Threads.@threads for i in 1:length(outvecbio)
     lock(lk)
         threadprint(i, Threads.threadid())
     unlock(lk)
-    if i <= length(outvecbio)
-        global outvecbio[i] = solve_system_model(datavec[i], LoadshareBioConfig(1.), silent=true)
-    else
-        n = i - length(outvecbio)
-        global outvecnobio[n] = solve_system_model(datavec[n], LoadshareNoBioConfig(1.), silent=true)
-    end
+    global outvecbio[i] = solve_system_model(datavec[i], LoadshareBioConfig(1.), silent=true)
 end
 println("")
 
-# Create figure to illustrate relative system costs associated with different data years
-plot_systemcosts(bioresults, outvecbio, "bio_datayears", xvals=[string(x) for _ in 1:2, x in 2015:2019][:], xlabel="Data year")
-plot_systemcosts(nobioresults, outvecnobio, "nobio_datayears", xvals=[string(x) for _ in 1:2, x in 2015:2019][:], xlabel="Data year")
-
-# Save output from model simulations
-# for (i, model) in enumerate(outvec)
-#     global scenario_df[:, "greenfield2 (" * string(2014 + i) * ")"] = scenarioreport(model, baseline_out)
-# end
+# Save data from model simulations
+styleprintln("Saving output from model simulations")
+dfname  = "Greenfield - Storage (Bio) ("
+figname = "greenfield_storage_bio_"
+plot_systemcosts(bioresults, outvecbio, figname, xvals=[string(x) for _ in 1:2, x in 2015:2019][:], xlabel="Data year")
+for (i, model) in enumerate(outvecbio) 
+    # Save results to DataFrame
+    global scenario_df[:, dfname * string(2014 + i)] = scenarioreport(model, bioresults[i])
+    # Plot generation, capacities and residual demand
+    plot_hourly_gen(datavec[i], model, figname * string(2014 + i))
+    plot_hourly_storage(datavec[i], model, figname * string(2014 + i))
+    plot_capacities(datavec[i], model, figname * string(2014 + i))
+    plot_generation(datavec[i], model, figname * string(2014 + i))
+end
 
 # Write experiment results to CSV file and print the associated dataframe
 CSV.write("../output/scenarios.csv", scenario_df)
